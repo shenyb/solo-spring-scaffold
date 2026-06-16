@@ -1,112 +1,70 @@
-希望有最基础的功能
-其他挑一些全部成插件  可选的功能
+# solo-spring-scaffold 项目状态 & 商业分析
 
-现有基础（值得肯定的）
-| 模块              | 评价                                                                               |
-|-------------------|------------------------------------------------------------------------------------|
-| Python CLI 生成器 | 功能完整，占位符替换、模块化、MySQL/H2 切换、代码生成器集成                        |
-| 四层模块拆分      | common/dao/service/web 架构清晰，依赖链正确                                        |
-| common 基础设施   | Result/PageResult、BizException、GlobalExceptionHandler、LoggingAspect、MDC Filter |
-| 持久层            | MyBatis-Plus + Flyway + MetaObjectHandler + 分页插件                               |
-| 部署脚本          | start/stop/deploy + Windows bat/Linux sh 双平台                                    |
-| logback 配置      | 按级别分级切割、traceId 注入                                                       |
-| 参数校验          | 国际化 validation.properties                                                       |
+## ✅ 已完成 P0 功能
 
-核心缺失
+### 1. Security 插件 (`plugins/security/`)
+- SecurityConfig — 无状态 JWT 会话、CSRF 关闭、路由权限规则
+- JwtTokenProvider — HMAC-SHA256 签名、access/refresh 双令牌
+- JwtAuthenticationFilter — Bearer Token 提取 + SecurityContext 设置
+- JwtAuthenticationEntryPoint — 401 JSON 响应（非重定向）
+- SecurityExceptionHandler — 403 Forbidden JSON 响应
+- TokenPair — 令牌对数据类
+- AuthController — /api/auth/login, /register, /refresh
+- AuthService/AuthServiceImpl — 登录/注册/刷新业务逻辑
+- LoginRequest/LoginResponse/RegisterRequest DTO
+- Flyway V3 迁移 — 添加 password 字段 + BCrypt 默认密码
+- validation.properties 补丁 — 认证消息国际化
+- application.yml 补丁 — JWT 配置项
+- POM 依赖补丁 — spring-boot-starter-security + jjwt 0.12.6
 
-🔴 P0
+### 2. Docker 插件 (`plugins/docker/`)
+- Dockerfile — eclipse-temurin JRE Alpine、非 root 用户、分层构建、HEALTHCHECK
+- docker-compose.yml — App + MySQL 服务、健康检查、网络隔离
+- .dockerignore — 排除无关文件减小构建上下文
 
-1. 安全 == 零
-- 没有 Spring Security
-- 没有 JWT/OAuth2
-- 没有密码编码器
-- 没有任何权限控制的模板
-- 这是所有企业项目的底线，没有就等于废品
+### 3. Test 插件 (`plugins/test/`)
+- UserServiceTest — 单元测试（Mockito + Nested + DisplayName）
+- UserControllerTest — 切片测试（MockMvc + @WebMvcTest）
+- UserMapperTest — 集成测试（H2 内存库 + @DataJdbcTest）
 
-2. 测试 == 零
-- 一个测试文件都没有
-- 没有 TestContainers 集成测试模板
-- 没有 Repository/Service/Controller 分层测试样例
-- 生成出来的项目开发者要自己从头写测试，那你提供的价值大打折扣
+### 4. Redis 插件 (`plugins/redis/`)
+- RedisConfig — JSON 序列化 + Java 8 时间类型 + 30 分钟 TTL
+- application-redis.yml — Lettuce 连接池配置
+- POM 依赖补丁 — spring-boot-starter-data-redis + commons-pool2
 
-3. 缓存 == 零
-- 没有 Redis 配置模板
-- 没有 Caffeine 本地缓存
-- 没有 @Cacheable 的示例代码
+### 5. Actuator 插件 (`plugins/actuator/`)
+- DatabaseHealthIndicator — 自定义数据库健康检查
+- application-actuator.yml — 暴露 health/info/metrics/prometheus 端点
+- POM 依赖补丁 — spring-boot-starter-actuator + micrometer-registry-prometheus
 
-4. Docker/部署 == 零
-- 没有 Dockerfile（分层构建、多阶段）
-- 没有 docker-compose.yml（MySQL + Redis + App）
-- 没有 .dockerignore
-- 没有 Kubernetes/Helm
+## 🏗️ 插件体系架构
 
-5. 监控 == 零
-- 没有 Spring Boot Actuator
-- 没有 Micrometer/Prometheus 指标暴露
-- 没有健康检查端点配置
+### plugin.yaml 规范
+- name/version/description/author/category/tags
+- requires — 插件间依赖
+- templates — 新增文件列表
+- patches — 补丁类型：yaml-append / properties-append / copy / dependencies / field-inject
 
-🟠 P1 — 严重影响买家决策
+### CLI 支持的插件命令
+- `--plugins security,docker,test` — 启用插件
+- `list-plugins` — 列出可用插件
 
-6. 只有 User 一个演示 Domain
-- 没有多表关联示例（一对多、多对多）
-- 没有文件上传下载
-- 没有异步处理/事件驱动
-- 没有定时任务
-- 没有 WebSocket/SSE
-- 买的人会觉得 "就这？"
+### 补丁引擎
+- YAML 追加：合并到 application.yml
+- Properties 追加：合并到 validation.properties
+- 依赖注入：解析 `module=g:a:v` 格式，注入到 pom.xml
+- 代码注入：在指定行后插入 Java 字段/方法
 
-7. Swagger/OpenAPI 只有依赖没有配置类
-- 没有 OpenApiConfig（分组、全局参数、security scheme）
-- 没有 License/Contact/Server 信息
-- DTO 字段上没有 @Schema(description = ...) 中文说明（只有 swagger-annotations 依赖）
+## 📋 在线平台方案
 
-8. 多环境配置不完整
-- dev 用 H2、prod 用 MySQL，但缺少：
-  - application-staging.yml
-  - 没有 Redis 配置示例
-  - 没有日志级别按环境切换
+详见 `docs/online-platform-blueprint.md`
 
-9. 代码质量工具缺失
-- 没有 Checkstyle/SpotBugs/PMD/ArchUnit 配置
-- 没有 EditorConfig
-- 没有 .gitattributes
-- 没有 GitHub Actions CI 模板
+核心技术栈：
+- 前端：Next.js 14 + Tailwind
+- 后端：FastAPI（复用 CLI 生成逻辑）
+- 部署：Vercel + Railway
 
-10. CI/CD == 零
-- 没有 GitHub Actions 工作流
-- 没有 Maven 发布配置
-- 没有 SonarQube 扫描
-
-🟡 P2 — 影响产品力
-
-11. 核心企业功能缺失
-- 数据脱敏 / 加解密（Jasypt）
-- 操作审计日志（AuditLog）
-- Excel/CSV 导入导出（EasyExcel）
-- 分布式锁示例（Redisson）
-- 配置中心/注册中心 demo
-
-12. Generator CLI 本身不够产品化
-- 不能通过 pip install 安装
-- 没有交互式向导（提问式选择模块）
-- Python 代码没有测试
-- 不能选择 JPA vs MyBatis-Plus
-- 不能选择数据库类型（H2/MySQL/PostgreSQL/Oracle）
-- docs/ 目录为空
-
-13. 文档/网站 == 零
-- 没有产品官网
-- 没有使用教程
-- 没有架构决策记录（ADR）
-- 没有晋升指南（从 demo 到生产）
-
-
-
-我的建议
-
-
-
-
-P0: Security + Docker + Test → 让项目能跑进生产环境
-P1: Redis + Multi-domain demo + CI → 让人相信你架构决策的质量
-P2: Generator 交互化 + 文档网站 → 降低购买决策成本
+商业模式：
+- Free：基础骨架 + security + docker + test
+- Pro (¥199/年)：+ redis + actuator + 多 Domain + 审计日志
+- Enterprise (¥599/年)：+ 微服务 + K8s + 分布式锁 + 定制

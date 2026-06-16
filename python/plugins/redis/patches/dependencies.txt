@@ -1,0 +1,4 @@
+# ─── Redis 插件：POM 依赖补丁 ───
+
+dao = org.springframework.boot:spring-boot-starter-data-redis
+dao = org.apache.commons:commons-pool2

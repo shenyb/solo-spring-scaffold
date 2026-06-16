@@ -1,0 +1,23 @@
+# Docker 插件 — plugin.yaml
+name: docker
+version: 1.0.0
+description: Dockerfile + docker-compose.yml（分层构建、健康检查、MySQL 容器）
+author: solo-spring-scaffold
+category: infra
+tags: [docker, container, deploy]
+requires: []
+
+templates:
+  - dest: .
+    files:
+      - Dockerfile
+      - docker-compose.yml
+      - .dockerignore
+
+patches: []
+
+# docker-compose.yml 中的占位符需额外处理
+conditional-placeholders:
+  - key: hasMySQL
+    description: 是否包含 MySQL 服务
+    default: true

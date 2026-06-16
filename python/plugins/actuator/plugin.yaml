@@ -1,0 +1,20 @@
+# Actuator 插件 — plugin.yaml
+name: actuator
+version: 1.0.0
+description: Spring Boot Actuator + Prometheus 指标 + 健康检查
+author: solo-spring-scaffold
+category: infra
+tags: [monitoring, actuator, prometheus, metrics]
+requires: []
+
+templates:
+  - dest: dao/src/main/java/__pkg__/config
+    files:
+      - DatabaseHealthIndicator.java
+
+patches:
+  - type: yaml-append
+    src: application-actuator.yml
+    dest: web/src/main/resources/application.yml
+  - type: dependencies
+    src: dependencies.txt

@@ -1,0 +1,7 @@
+# ─── Security 插件 YAML 补丁 ───
+# 合并到 application.yml
+
+jwt:
+  secret: ${JWT_SECRET:default-secret-key-must-be-at-least-256-bits-long-for-hs256}
+  access-token-validity: ${JWT_ACCESS_TOKEN_VALIDITY:3600000}    # 1 小时
+  refresh-token-validity: ${JWT_REFRESH_TOKEN_VALIDITY:86400000}  # 24 小时

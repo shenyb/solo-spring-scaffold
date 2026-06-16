@@ -1,0 +1,15 @@
+# ─── .dockerignore ───
+# 减少构建上下文大小
+
+.git
+.idea
+*.iml
+target/
+!*/target/*.jar
+logs/
+*.log
+.DS_Store
+*.md
+!README.md
+bin/
+.env

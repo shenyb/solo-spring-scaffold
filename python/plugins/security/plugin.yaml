@@ -1,0 +1,72 @@
+# Security 插件 — plugin.yaml
+name: security
+version: 1.0.0
+description: Spring Security + JWT 认证/鉴权，含登录、注册、令牌刷新
+author: solo-spring-scaffold
+category: core
+tags: [security, jwt, auth]
+requires: []
+
+# 插件模板文件（合并到基础项目）
+templates:
+  - dest: common/src/main/java/__pkg__/common/security
+    files:
+      - SecurityConfig.java
+      - JwtTokenProvider.java
+      - JwtAuthenticationFilter.java
+      - JwtAuthenticationEntryPoint.java
+      - SecurityExceptionHandler.java
+      - TokenPair.java
+  - dest: service/src/main/java/__pkg__/user
+    files:
+      - AuthService.java
+  - dest: service/src/main/java/__pkg__/user/impl
+    files:
+      - AuthServiceImpl.java
+  - dest: service/src/main/java/__pkg__/user/dto
+    files:
+      - LoginRequest.java
+      - LoginResponse.java
+      - RegisterRequest.java
+  - dest: web/src/main/java/__pkg__/web/auth
+    files:
+      - AuthController.java
+
+# 补丁文件（追加/合并到已有文件）
+patches:
+  # 追加到 application.yml
+  - type: yaml-append
+    src: application-security.yml
+    dest: web/src/main/resources/application.yml
+  # 追加到 validation.properties
+  - type: properties-append
+    src: validation-security.properties
+    dest: web/src/main/resources/messages/validation.properties
+  # 新增 Flyway 迁移脚本
+  - type: copy
+    src: V3__add_user_password.sql
+    dest: web/src/main/resources/db/migration/V3__add_user_password.sql
+  # POM 依赖
+  - type: dependencies
+    src: dependencies.txt
+
+# User Entity 需要新增的字段
+entity-patches:
+  - entity: User
+    fields:
+      - name: password
+        type: String
+        annotation: |
+          @Schema(description = "密码（加密存储）")
+        column: password VARCHAR(128)
+
+# 需要修改的已有文件（占位符替换 + 代码注入）
+file-modifications:
+  # User.java 新增 password 字段
+  - file: dao/src/main/java/__pkg__/user/User.java
+    type: field-inject
+    after: "private String username;"
+    content: |
+      
+          @Schema(description = "密码（加密存储）")
+          private String password;

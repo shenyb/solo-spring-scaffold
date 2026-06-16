@@ -1,0 +1,63 @@
+# ─── docker-compose.yml ───
+# 本地开发/测试用一键启动
+# 生产环境请按需调整
+
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: {{projectName}}-app
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+      - JAVA_OPTS=-Xms256m -Xmx512m
+      - TZ=Asia/Shanghai
+{% if hasMySQL %}
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/{{dbName}}?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8mb4
+      - SPRING_DATASOURCE_USERNAME=root
+      - SPRING_DATASOURCE_PASSWORD={{dbPass}}
+{% endif %}
+{% if hasMySQL %}
+    depends_on:
+      mysql:
+        condition: service_healthy
+{% endif %}
+    restart: unless-stopped
+    networks:
+      - app-network
+{% if hasMySQL %}
+
+  mysql:
+    image: mysql:8.0
+    container_name: {{projectName}}-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD={{dbPass}}
+      - MYSQL_DATABASE={{dbName}}
+      - TZ=Asia/Shanghai
+    volumes:
+      - mysql-data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - app-network
+{% endif %}
+
+networks:
+  app-network:
+    driver: bridge
+{% if hasMySQL %}
+
+volumes:
+  mysql-data:
+{% endif %}

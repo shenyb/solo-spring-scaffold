@@ -6,6 +6,9 @@ solo-spring-scaffold — Spring Boot 3.x 项目脚手架生成器
     python solo-spring-scaffold init my-app --package com.example.myapp --jdk 21
     python solo-spring-scaffold init my-app --package com.example.myapp --jdk 21 \\
         --db-url jdbc:mysql://192.168.1.100:3306/mydb --db-user root --db-pass xxx
+    python solo-spring-scaffold init my-app --package com.example.myapp --jdk 21 \\
+        --plugins security,docker,test
+    python solo-spring-scaffold list-plugins
 """
 import argparse
 import os
@@ -23,9 +26,20 @@ SPRING_BOOT_VERSIONS = {
     25: "3.4.4",
 }
 
-TEMPLATES_DIR = Path(__file__).parent / "templates"
-GENERATOR_TPL_DIR = Path(__file__).parent / "generator_tpl"
-BIN_TPL_DIR = Path(__file__).parent / "bin_tpl"
+SCRIPT_DIR = Path(__file__).parent
+TEMPLATES_DIR = SCRIPT_DIR / "templates"
+GENERATOR_TPL_DIR = SCRIPT_DIR / "generator_tpl"
+BIN_TPL_DIR = SCRIPT_DIR / "bin_tpl"
+PLUGINS_DIR = SCRIPT_DIR / "plugins"
+
+# 内置插件（P0 优先级）
+BUILTIN_PLUGINS = {
+    "security": "Spring Security + JWT 认证/鉴权",
+    "docker": "Dockerfile + docker-compose.yml",
+    "test": "单元/集成测试模板（JUnit 5 + Mockito）",
+    "redis": "Redis + Spring Cache 配置",
+    "actuator": "Spring Boot Actuator + Prometheus 指标",
+}
 
 # 需要替换的占位符文件
 PLACEHOLDER_FILES = {
@@ -78,6 +92,358 @@ def resolve_jdk(jdk: int) -> int:
         )
     return jdk
 
+
+# ═══════════════════════════════════════════
+# 插件系统
+# ═══════════════════════════════════════════
+
+def load_plugin_meta(plugin_name: str) -> Optional[dict]:
+    """加载插件的 plugin.yaml 元数据（简易解析，不依赖 PyYAML）"""
+    plugin_yaml = PLUGINS_DIR / plugin_name / "plugin.yaml"
+    if not plugin_yaml.exists():
+        return None
+
+    meta = {"name": plugin_name, "templates": [], "patches": []}
+
+    # 简易 YAML 解析（无 PyYAML 依赖）
+    content = plugin_yaml.read_text(encoding="utf-8")
+    current_section = None
+    current_item = {}
+
+    def _flush_item():
+        """收尾当前 item 到对应列表"""
+        nonlocal current_item
+        if not current_item:
+            return
+        if current_section == "templates" and "dest" in current_item:
+            meta["templates"].append(current_item)
+        elif current_section == "patches" and "type" in current_item:
+            meta["patches"].append(current_item)
+        current_item = {}
+
+    for line in content.splitlines():
+        stripped = line.strip()
+
+        # 跳过空行和注释
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        # 顶层 key
+        if not line.startswith(" ") and ":" in stripped:
+            key, _, value = stripped.partition(":")
+            key = key.strip()
+            value = value.strip()
+
+            # 先收尾前一个 section 的 item
+            _flush_item()
+
+            if key in ("name", "version", "description", "author", "category"):
+                meta[key] = value
+            elif key == "tags":
+                meta[key] = [t.strip() for t in value.strip("[]").split(",") if t.strip()]
+            elif key == "requires":
+                meta[key] = [t.strip() for t in value.strip("[]").split(",") if t.strip()]
+            current_section = key
+            current_item = {}
+            continue
+
+        # templates 列表项
+        if current_section == "templates" and stripped.startswith("- dest:"):
+            _flush_item()
+            current_item = {"dest": stripped.partition(":")[2].strip()}
+        elif current_section == "templates" and "dest" in current_item:
+            if stripped.startswith("files:"):
+                current_item["files"] = []
+            elif stripped.startswith("- ") and "files" in current_item:
+                current_item["files"].append(stripped.lstrip("- ").strip())
+
+        # patches 列表项
+        if current_section == "patches" and stripped.startswith("- type:"):
+            _flush_item()
+            current_item = {"type": stripped.partition(":")[2].strip()}
+        elif current_section == "patches" and "type" in current_item:
+            if ":" in stripped:
+                k, _, v = stripped.partition(":")
+                current_item[k.strip()] = v.strip()
+
+    # 收尾最后一个 item
+    _flush_item()
+
+    return meta
+
+
+def list_available_plugins() -> list[dict]:
+    """列出所有可用插件"""
+    plugins = []
+    if not PLUGINS_DIR.exists():
+        return plugins
+    for d in sorted(PLUGINS_DIR.iterdir()):
+        if d.is_dir() and (d / "plugin.yaml").exists():
+            meta = load_plugin_meta(d.name)
+            if meta:
+                plugins.append(meta)
+    return plugins
+
+
+def apply_plugin(
+    plugin_name: str,
+    project_path: Path,
+    placeholders: dict[str, str],
+):
+    """将插件模板和补丁应用到项目"""
+    plugin_dir = PLUGINS_DIR / plugin_name
+    meta = load_plugin_meta(plugin_name)
+
+    if not meta:
+        warn(f"插件 {plugin_name} 未找到，跳过")
+        return
+
+    info(f"应用插件: {plugin_name} — {meta.get('description', '')}")
+
+    # ── 1. 拷贝模板文件 ──
+    project_name = placeholders["{{projectName}}"]
+
+    for tpl_entry in meta.get("templates", []):
+        dest_rel = tpl_entry.get("dest", "")
+        files = tpl_entry.get("files", [])
+
+        if not dest_rel or not files:
+            continue
+
+        # 目标路径中 __pkg__ 替换为实际包路径
+        dest_rel_resolved = dest_rel.replace("__pkg__", to_package_dir(placeholders["{{basePackage}}"]))
+
+        # 模块目录加项目名前缀: common/ → {projectName}-common/
+        for module in MODULE_DIRS:
+            # 匹配路径开头的模块名（如 "common/src/..." → "{projectName}-common/src/..."）
+            prefix = module + "/"
+            if dest_rel_resolved.startswith(prefix):
+                dest_rel_resolved = f"{project_name}-{dest_rel_resolved}"
+                break
+            # 也匹配 "." (根目录，如 docker 插件)
+            if dest_rel_resolved == module:
+                dest_rel_resolved = f"{project_name}-{module}"
+                break
+
+        target_dir = project_path / dest_rel_resolved
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        for filename in files:
+            # 在插件 templates 目录下搜索文件
+            src_file = _find_plugin_file(plugin_dir / "templates", filename)
+            if src_file is None:
+                warn(f"  模板文件 {filename} 未找到，跳过")
+                continue
+
+            dst_file = target_dir / filename
+            # 处理文件名中的占位符
+            final_name = dst_file.name
+            for key, value in placeholders.items():
+                if key in final_name:
+                    final_name = final_name.replace(key, value)
+            dst_file = dst_file.parent / final_name
+
+            shutil.copy2(src_file, dst_file)
+            replace_in_file(dst_file, placeholders)
+
+    # ── 2. 应用补丁 ──
+    for patch in meta.get("patches", []):
+        patch_type = patch.get("type", "")
+
+        if patch_type == "yaml-append":
+            src = plugin_dir / "patches" / patch.get("src", "")
+            dest_rel = patch.get("dest", "").replace(
+                "__pkg__", to_package_dir(placeholders["{{basePackage}}"]))
+            dest_rel = _add_module_prefix(dest_rel, project_name)
+            dest = project_path / dest_rel
+
+            if src.exists() and dest.exists():
+                _patch_yaml_append(src, dest)
+            elif src.exists():
+                # 目标文件不存在，直接拷贝
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                replace_in_file(dest, placeholders)
+
+        elif patch_type == "properties-append":
+            src = plugin_dir / "patches" / patch.get("src", "")
+            dest_rel = patch.get("dest", "")
+            dest_rel = _add_module_prefix(dest_rel, project_name)
+            dest = project_path / dest_rel
+
+            if src.exists() and dest.exists():
+                _patch_properties_append(src, dest)
+            elif src.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                replace_in_file(dest, placeholders)
+
+        elif patch_type == "copy":
+            src = plugin_dir / "patches" / patch.get("src", "")
+            dest_rel = patch.get("dest", "")
+            dest_rel = _add_module_prefix(dest_rel, project_name)
+            dest = project_path / dest_rel
+
+            if src.exists():
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                replace_in_file(dest, placeholders)
+
+        elif patch_type == "dependencies":
+            src = plugin_dir / "patches" / patch.get("src", "")
+            if src.exists():
+                _patch_dependencies(src, project_path, placeholders)
+
+    # ── 3. 文件修改（field-inject 等）──
+    for mod in meta.get("file-modifications", []):
+        mod_type = mod.get("type", "")
+        if mod_type == "field-inject":
+            target_rel = mod.get("file", "").replace(
+                "__pkg__", to_package_dir(placeholders["{{basePackage}}"]))
+            target_rel = _add_module_prefix(target_rel, project_name)
+            target_file = project_path / target_rel
+            after_line = mod.get("after", "")
+            inject_content = mod.get("content", "")
+
+            if target_file.exists() and after_line:
+                _patch_field_inject(target_file, after_line, inject_content, placeholders)
+
+    ok(f"插件 {plugin_name} 已应用")
+
+
+def _add_module_prefix(path_rel: str, project_name: str) -> str:
+    """为路径中的模块目录加项目名前缀: web/src/... → {projectName}-web/src/..."""
+    for module in MODULE_DIRS:
+        prefix = module + "/"
+        if path_rel.startswith(prefix):
+            return f"{project_name}-{path_rel}"
+    return path_rel
+
+
+def _find_plugin_file(search_dir: Path, filename: str) -> Optional[Path]:
+    """递归搜索插件模板目录中的文件"""
+    if not search_dir.exists():
+        return None
+    for f in search_dir.rglob("*"):
+        if f.name == filename:
+            return f
+    return None
+
+
+def _patch_yaml_append(src: Path, dest: Path):
+    """将 src YAML 内容追加到 dest 文件末尾"""
+    addition = src.read_text(encoding="utf-8")
+    existing = dest.read_text(encoding="utf-8")
+    # 确保有换行分隔
+    if not existing.endswith("\n"):
+        existing += "\n"
+    dest.write_text(existing + "\n" + addition, encoding="utf-8")
+
+
+def _patch_properties_append(src: Path, dest: Path):
+    """将 src properties 追加到 dest 文件末尾"""
+    addition = src.read_text(encoding="utf-8")
+    existing = dest.read_text(encoding="utf-8")
+    if not existing.endswith("\n"):
+        existing += "\n"
+    dest.write_text(existing + "\n" + addition, encoding="utf-8")
+
+
+def _patch_dependencies(dep_file: Path, project_path: Path, placeholders: dict[str, str]):
+    """解析 dependencies.txt 并向对应模块的 pom.xml 注入依赖"""
+    if not dep_file.exists():
+        return
+
+    module_deps: dict[str, list[str]] = {}
+
+    for line in dep_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        # 格式: module = groupId:artifactId[:version]
+        parts = line.split("=")
+        if len(parts) != 2:
+            continue
+
+        module = parts[0].strip()
+        dep_str = parts[1].strip()
+
+        if module not in module_deps:
+            module_deps[module] = []
+        module_deps[module].append(dep_str)
+
+    for module, deps in module_deps.items():
+        # 找到对应模块的 pom.xml
+        project_name = placeholders["{{projectName}}"]
+        pom_path = project_path / f"{project_name}-{module}" / "pom.xml"
+        if not pom_path.exists():
+            # 可能是父 POM
+            pom_path = project_path / "pom.xml"
+        if not pom_path.exists():
+            warn(f"  找不到 {module} 模块的 pom.xml，跳过依赖注入")
+            continue
+
+        pom_content = pom_path.read_text(encoding="utf-8")
+
+        # 构建 XML 依赖片段
+        dep_xml_parts = []
+        for dep_str in deps:
+            dep_parts = dep_str.split(":")
+            if len(dep_parts) < 2:
+                continue
+            group_id = dep_parts[0]
+            artifact_id = dep_parts[1]
+            version = dep_parts[2] if len(dep_parts) > 2 else None
+
+            xml = f"""
+        <dependency>
+            <groupId>{group_id}</groupId>
+            <artifactId>{artifact_id}</artifactId>"""
+            if version:
+                xml += f"""
+            <version>{version}</version>"""
+            xml += """
+        </dependency>"""
+            dep_xml_parts.append(xml)
+
+        if not dep_xml_parts:
+            continue
+
+        # 找到 </dependencies> 并在其前插入
+        all_deps = "".join(dep_xml_parts)
+        if "</dependencies>" in pom_content:
+            pom_content = pom_content.replace(
+                "</dependencies>",
+                f"{all_deps}\n    </dependencies>",
+                1  # 只替换第一个（模块内 dependencies）
+            )
+        else:
+            # 没有 <dependencies> 标签，需要创建
+            pom_content = pom_content.replace(
+                "</dependencies>",
+                f"\n    <dependencies>{all_deps}\n    </dependencies>\n",
+            )
+
+        pom_path.write_text(pom_content, encoding="utf-8")
+
+
+def _patch_field_inject(target_file: Path, after_line: str, content: str, placeholders: dict[str, str]):
+    """在目标文件指定行后注入代码"""
+    file_content = target_file.read_text(encoding="utf-8")
+
+    # 替换内容中的占位符
+    for key, value in placeholders.items():
+        content = content.replace(key, value)
+
+    if after_line in file_content:
+        file_content = file_content.replace(after_line, after_line + content)
+        target_file.write_text(file_content, encoding="utf-8")
+
+
+# ═══════════════════════════════════════════
+# 核心生成逻辑
+# ═══════════════════════════════════════════
 
 def make_placeholder_map(
     project_name: str,
@@ -191,6 +557,7 @@ def generate_project(
     db_url: Optional[str] = None,
     db_user: Optional[str] = None,
     db_pass: Optional[str] = None,
+    plugins: Optional[list[str]] = None,
 ):
     """从模板生成完整项目"""
 
@@ -202,6 +569,8 @@ def generate_project(
         db_user=db_user,
         db_pass=db_pass,
     )
+
+    plugins = plugins or []
 
     print(f"\n{Color.BOLD}🚀 生成 {project_name} ...{Color.RESET}\n")
 
@@ -251,13 +620,29 @@ def generate_project(
 
         ok(f"Generator.java + gen-tables 脚本已生成 (配好 MySQL 后运行 bin/gen-tables.sh/bat)")
 
-    # ── 5. 写入 JDK 到文档 ──
+    # ── 5. 应用插件 ──
+    if plugins:
+        info(f"应用 {len(plugins)} 个插件: {', '.join(plugins)}")
+        for plugin_name in plugins:
+            apply_plugin(plugin_name, project_path, placeholders)
+
+    # ── 6. 写入 README ──
     info("生成 README 提示...")
     readme_path = project_path / "README.md"
+
+    plugins_section = ""
+    if plugins:
+        plugins_section = f"""
+## 已启用插件
+
+{chr(10).join(f'- **{p}**' for p in plugins)}
+
+"""
+
     readme = f"""# {project_name}
 
 > Generated by **solo-spring-scaffold**
-
+{plugins_section}
 ## 快速开始
 
 ```bash
@@ -321,6 +706,17 @@ def cmd_init(args):
         print(f"{Color.YELLOW}{e}{Color.RESET}")
         sys.exit(1)
 
+    # 解析插件列表
+    plugins = []
+    if args.plugins:
+        plugins = [p.strip() for p in args.plugins.split(",") if p.strip()]
+
+        # 验证插件是否存在
+        for p in plugins:
+            if not (PLUGINS_DIR / p / "plugin.yaml").exists():
+                warn(f"插件 '{p}' 不存在，可用插件: {', '.join(BUILTIN_PLUGINS.keys())}")
+                sys.exit(1)
+
     generate_project(
         project_path=project_path,
         project_name=project_name,
@@ -329,7 +725,25 @@ def cmd_init(args):
         db_url=args.db_url,
         db_user=args.db_user,
         db_pass=args.db_pass,
+        plugins=plugins,
     )
+
+
+def cmd_list_plugins(args):
+    """列出所有可用插件"""
+    plugins = list_available_plugins()
+
+    if not plugins:
+        print("没有找到可用插件")
+        return
+
+    print(f"\n{Color.BOLD}可用插件 ({len(plugins)}):{Color.RESET}\n")
+    for p in plugins:
+        print(f"  {Color.GREEN}{p['name']}{Color.RESET} — {p.get('description', '无描述')}")
+        print(f"    版本: {p.get('version', '?')}  分类: {p.get('category', '?')}  标签: {', '.join(p.get('tags', []))}")
+        if p.get("requires"):
+            print(f"    依赖: {', '.join(p['requires'])}")
+        print()
 
 
 def main():
@@ -343,6 +757,13 @@ def main():
   # 生成骨架 + MySQL 代码生成器
   python solo-spring-scaffold init my-app --package com.example.myapp --jdk 21 \\
       --db-url jdbc:mysql://192.168.1.100:3306/mydb --db-user root --db-pass xxx
+
+  # 生成骨架 + 启用插件
+  python solo-spring-scaffold init my-app --package com.example.myapp --jdk 21 \\
+      --plugins security,docker,test
+
+  # 查看可用插件
+  python solo-spring-scaffold list-plugins
 """,
     )
 
@@ -357,11 +778,19 @@ def main():
     init_parser.add_argument("--db-url", help="MySQL 连接地址（可选）")
     init_parser.add_argument("--db-user", help="MySQL 用户名")
     init_parser.add_argument("--db-pass", help="MySQL 密码")
+    init_parser.add_argument(
+        "--plugins", "-P",
+        help=f"启用插件，逗号分隔（如 security,docker,test）。可用: {', '.join(BUILTIN_PLUGINS.keys())}",
+    )
+
+    list_parser = subparsers.add_parser("list-plugins", help="列出可用插件")
 
     args = parser.parse_args()
 
     if args.command == "init":
         cmd_init(args)
+    elif args.command == "list-plugins":
+        cmd_list_plugins(args)
     else:
         parser.print_help()
 

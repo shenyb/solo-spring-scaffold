@@ -1,0 +1,4 @@
+# ─── Actuator 插件：POM 依赖补丁 ───
+
+web = org.springframework.boot:spring-boot-starter-actuator
+web = io.micrometer:micrometer-registry-prometheus

@@ -1,0 +1,23 @@
+# Test 插件 — plugin.yaml
+name: test
+version: 1.0.0
+description: 单元测试 + 集成测试模板（JUnit 5 + Mockito + MockMvc + TestContainers）
+author: solo-spring-scaffold
+category: quality
+tags: [test, junit, mockito, testcontainers]
+requires: []
+
+templates:
+  - dest: service/src/test/java/__pkg__/user
+    files:
+      - UserServiceTest.java
+  - dest: web/src/test/java/__pkg__/user
+    files:
+      - UserControllerTest.java
+  - dest: dao/src/test/java/__pkg__/user
+    files:
+      - UserMapperTest.java
+
+patches:
+  - type: dependencies
+    src: dependencies.txt

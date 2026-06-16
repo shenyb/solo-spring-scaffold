@@ -1,0 +1,20 @@
+# Redis 插件 — plugin.yaml
+name: redis
+version: 1.0.0
+description: Redis + Spring Cache 配置（Lettuce + JSON 序列化 + Java 8 时间类型）
+author: solo-spring-scaffold
+category: infra
+tags: [redis, cache, caching]
+requires: []
+
+templates:
+  - dest: dao/src/main/java/__pkg__/config
+    files:
+      - RedisConfig.java
+
+patches:
+  - type: yaml-append
+    src: application-redis.yml
+    dest: web/src/main/resources/application.yml
+  - type: dependencies
+    src: dependencies.txt

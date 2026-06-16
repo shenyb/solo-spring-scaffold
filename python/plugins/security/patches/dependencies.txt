@@ -1,0 +1,12 @@
+# ─── Security 插件：POM 依赖补丁 ───
+# 格式: module = groupId:artifactId
+# 合并到对应模块的 pom.xml
+
+# common 模块新增依赖
+common = org.springframework.boot:spring-boot-starter-security
+common = io.jsonwebtoken:jjwt-api:0.12.6
+common = io.jsonwebtoken:jjwt-impl:0.12.6
+common = io.jsonwebtoken:jjwt-jackson:0.12.6
+
+# web 模块新增依赖（已通过 service 传递，此处显式声明用于 Actuator 安全）
+web = org.springframework.boot:spring-boot-starter-security

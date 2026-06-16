@@ -1,0 +1,13 @@
+# ─── Test 插件：POM 依赖补丁 ───
+
+# 父 POM 新增 dependencyManagement
+parent = org.testcontainers:testcontainers-bom:1.20.4
+
+# dao 测试依赖
+dao = org.springframework.boot:spring-boot-starter-test
+dao = com.h2database:h2
+
+# service 测试依赖（已有 spring-boot-starter-test）
+service = org.mockito:mockito-junit-jupiter
+
+# web 测试依赖（已有 spring-boot-starter-test）
